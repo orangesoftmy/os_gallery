@@ -1,0 +1,129 @@
+<?php
+
+include_once('os_gallery.features.inc');
+
+/**
+ * Implementation of hook_disable().
+ */
+function os_gallery_disable() {
+  $views = array(
+    '0' => views_get_view('gallery_image'),
+    '1' => views_get_view('gallery_image_all'),
+  );
+  foreach($views as $view){
+    $view->delete();
+  }
+}
+
+/**
+ * Implementation of hook_init().
+ */
+function os_gallery_init() {
+  drupal_add_css(drupal_get_path('module', 'os_gallery').'/os_gallery.css');
+  
+  // Make sure the "vocabulary_node_types" table has entries 
+  // that attach the "gallery" content type with the "gallery category" vocab
+  if(!taxonomy_get_vocabularies('gallery')){
+    $query = db_query("SELECT vid FROM {vocabulary} WHERE name LIKE '%s%'", 'gallery cat');
+    while ($data = db_fetch_object($query)){
+      $vocab[$data->vid] = $data;
+    }
+    if(!empty($vocab)){
+      foreach($vocab as $row){
+        db_query("INSERT INTO {vocabulary_node_types} (vid, type) VALUES (%d, '%s')", $row->vid, 'gallery');
+      }
+    }
+  }
+}
+
+
+
+/**
+ * Implementation of hook_theme_registry_alter().
+ *
+ * @param $theme_registry The entire cache of theme registry information, post-processing.
+ */
+function os_gallery_theme_registry_alter(&$theme_registry) {
+  
+  $path = drupal_get_path('module', 'os_gallery').'/templates';
+  _theme_process_registry($theme_registry, 'phptemplate', 'theme_engine', 'os_gallery', $path);
+  
+  //return print_r($theme_registry['views_view']);
+}
+
+
+/* Implementation of hook_menu().
+ *
+ * @return An array of menu items.
+ */
+function os_gallery_menu() {
+  $items = array();
+
+  $items['gallery'] = array(
+    'title' => 'Gallery',
+    'page callback' => 'os_main_gallery_page',
+    'access arguments' => array('access content'),
+    'type' => MENU_SUGGESTED_ITEM,
+  );
+
+  return $items;
+}
+
+/** 
+ * 	Display all parents that has child term categorized inside a node. 
+ *  Display default "show all" page when no Gallery node are categorized 
+ **/
+function os_main_gallery_page(){
+
+  $vocab = taxonomy_get_vocabularies('gallery');
+  
+  foreach ($vocab as $item){
+    $vid = (preg_match('/gallery cat/i', $item->name)) ? $item->vid : '';
+  }
+  
+  if (!empty($vid)){
+    // Retrieve all term id within "Gallery Category" vocab
+    $tree = taxonomy_get_tree($vid);
+    $term_query = db_query("SELECT tid FROM {term_data} WHERE vid = %d", $vid);
+    while ($data = db_fetch_object($term_query)){
+      $tid[$data->tid] = $data;
+      // Check if the tid is assigned to any node
+      $node_query = db_query("SELECT nid,tid FROM {term_node} WHERE tid = %d", $data->tid);
+      while ($data = db_fetch_object($node_query)){
+        $nid[$data->tid] = $data;
+      }
+    }
+    
+    $output = '<div class="view gallery-category">';
+    
+    // Display category main page.
+    foreach ($tree as $key => $parent ){
+      if (in_array('0', array_values($parent->parents))){
+        // Retrieve all associated child of the parent term.
+        $child_tree = taxonomy_get_children($parent->tid, $vid);
+        //return print_r($child);
+        if(!empty($child_tree)){
+          foreach($child_tree as $index => $child){
+            // Check if any of the node is categorized under the child term
+            $output .= ($child->tid == $nid[$child->tid]->tid) ? views_embed_view('gallery_image', 'block_1', $parent->tid) : '';
+            // TODO: Support a 3 level hierarchy
+          }
+        }
+        else {
+          $output .= ($parent->tid == $nid[$parent->tid]->tid) ? views_embed_view('gallery_image', 'block_1', $parent->tid) : '';
+        }
+      }
+      
+    }
+    
+    $output .= '</div>';
+    
+    // Display "show all" non category page
+    $output .= views_embed_view('gallery_image_all', 'block_1');
+  }
+  else {
+   $output = print_r(db_fetch_array(db_query("SELECT * FROM {vocabulary_node_types}")));//'<div class="gallery-not-found">There are no gallery at the moment</div>';
+  }
+  return $output;
+
+}
